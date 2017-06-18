@@ -10,5 +10,4 @@ it for anything.
 
 todo
 ----
-* optimize DataFrame.dump() by using redis.mget per row or for the entire
-  dataframe at once
+* pandas-like accessing and setting of cell values
