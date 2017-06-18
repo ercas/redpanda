@@ -19,6 +19,20 @@ def from_csv(*args, **kwargs):
     df._from_csv(*args, **kwargs)
     return df
 
+def gen_key(row, column):
+    """ Generates a cell name given a row and colum name
+
+    Args:
+        row: The name of the row.
+        column: The name of the column.
+
+    Returns:
+        A string corresponding to the name of the cell (a.k.a. the key in the
+        Redis database)
+    """
+
+    return ROW_COL_DIVIDER.join([str(row), str(column)])
+
 class DataFrame():
     def __init__(self, db = 0, *redis_args, **redis_kwargs):
         self.db = db
@@ -56,7 +70,7 @@ class DataFrame():
 
         self.redis.sadd("rows", row)
         self.redis.sadd("columns", column)
-        self.redis.set(ROW_COL_DIVIDER.join([str(row), str(column)]), value)
+        self.redis.set(gen_key(row, column), value)
 
     def get(self, row, column):
         """ Gets the value of a cell
@@ -69,7 +83,7 @@ class DataFrame():
             The value of the cell, or None if it does not exist.
         """
 
-        result = self.redis.get(ROW_COL_DIVIDER.join([str(row), str(column)]))
+        result = self.redis.get(gen_key(row, column))
         if (result is None):
             return None
         else:
@@ -162,7 +176,7 @@ class DataFrame():
                 # rows are chunked to reduce the number of redis calls to 1
                 args = {}
                 for column_name in csv_row:
-                    args[ROW_COL_DIVIDER.join([str(row_name), str(column_name)])] = csv_row[column_name]
+                    args[gen_key(row_name, column_name)] = csv_row[column_name]
                 self.redis.mset(args)
                 self.redis.sadd("rows", row_name)
             self.redis.sadd("columns", *tuple(csv_row.keys()))
