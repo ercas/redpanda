@@ -49,12 +49,66 @@ def gen_key(column, row):
 
     return ROW_COL_DIVIDER.join([str(column), str(row)])
 
+class InitializationConflict(Exception):
+    pass
+
 class DataFrame():
-    def __init__(self, db = 0, *redis_args, **redis_kwargs):
+    """ Implements pandas-DataFrame-like functionality by utilizing a specially
+    structured Redis database
+
+    Attributes:
+        db: The Redis database the the dataframe is stored on.
+        redis: A redis.StrictRedis instance connected to the database.
+    """
+
+    def __init__(self, db = None, *redis_args, **redis_kwargs):
+        """ Initializes the DataFrame class
+
+        Args:
+            db: An integer representing the number of the Redis redpanda
+                database to connect to, or None if a new one should be created.
+        """
+
+        keyspace = redis.StrictRedis().info("keyspace")
+
+        if (db is None):
+            populated_dbs = [int(db_name[2:]) for db_name in keyspace]
+            db = 0
+            while (db in populated_dbs):
+                db += 1
+        else:
+            assert type(db) is int, "db must be an integer"
+
         self.db = db
         self.redis = redis.StrictRedis(db = db, *redis_args, **redis_kwargs)
 
+        # database validation - if connecting to an existing database, it must
+        # either be an empty database or contain the "redpanda_version" key
+        if (self.redis.get("redpanda_version") is None):
+            db_name = "db%d" % db
+            # the db existing in the keyspace is already enough to assume that
+            # it has keys
+            if (db_name in keyspace):
+                raise InitializationConflict(
+                    "Existing database %s is not compatible with redpanda"
+                    % db_name
+                )
+            else:
+                print("Creating new Redis database %s" % db_name)
+
+        # mark this database as a valid redpanda database
+        self.redis.set("redpanda_version", 1)
+
     def scan(self, key):
+        """ Scan a Redis set
+
+        Args:
+            key: The key of the Redis set.
+
+        Returns:
+            A list containing the contents of the set.
+        """
+
         results = []
         cursor = 0
         while True:
@@ -223,6 +277,8 @@ class DataFrame():
             per_row: A boolean describing whether or not data should be
                 imported on a row-by-row basis or all at once.
         """
+
+        self.redis.flushdb()
 
         i = 0
         with open(csv_path, "r") as f:
