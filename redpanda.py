@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import collections
 import csv
 import redis
 
@@ -52,7 +53,7 @@ def gen_key(column, row):
 class InitializationConflict(Exception):
     pass
 
-class DataFrame():
+class DataFrame(object):
     """ Implements pandas-DataFrame-like functionality by utilizing a specially
     structured Redis database
 
@@ -81,11 +82,11 @@ class DataFrame():
 
         self.db = db
         self.redis = redis.StrictRedis(db = db, *redis_args, **redis_kwargs)
+        db_name = "db%d" % db
 
         # database validation - if connecting to an existing database, it must
         # either be an empty database or contain the "redpanda_version" key
         if (self.redis.get("redpanda_version") is None):
-            db_name = "db%d" % db
             # the db existing in the keyspace is already enough to assume that
             # it has keys
             if (db_name in keyspace):
@@ -95,6 +96,8 @@ class DataFrame():
                 )
             else:
                 print("Creating new Redis database %s" % db_name)
+        else:
+            print("Connected to Redis database %s" % db_name)
 
         # mark this database as a valid redpanda database
         self.redis.set("redpanda_version", 1)
@@ -159,7 +162,7 @@ class DataFrame():
         else:
             return result.decode()
 
-    def get_row(self, row):
+    def dump_row(self, row):
         """ Returns a row as a dictionary
 
         Args:
@@ -174,7 +177,7 @@ class DataFrame():
         values = decode_list(self.redis.mget(*cell_names))
         return {columns[i]: values[i] for i in range(len(columns))}
 
-    def get_column(self, column):
+    def dump_column(self, column):
         """ Returns a column as a dictionary
 
         Args:
@@ -194,9 +197,14 @@ class DataFrame():
         the value of self.get(column, row) """
 
         return {
-            column: self.get_column(column)
+            column: self.dump_column(column)
             for column in self.columns
         }
+
+    def __getitem__(self, key):
+        """ Returns a DataFrameColumn object that facilitates getting/setting
+        of cell values """
+        return DataFrameColumn(self, key)
 
     def __str__(self):
         """ Print the contents of the dataframe when it is used in the print
@@ -211,7 +219,7 @@ class DataFrame():
         output.append("\t".join([""] + columns))
         for row in self.rows:
             row_output = [row]
-            row_contents = self.get_row(row)
+            row_contents = self.dump_row(row)
             for column in columns:
                 cell = row_contents[column]
                 if (cell is None):
@@ -247,7 +255,7 @@ class DataFrame():
             # content
             if (per_row):
                 for row in self.rows:
-                    row_content = self.get_row(row)
+                    row_content = self.dump_row(row)
                     if (write_index):
                         f.write("%s," % row)
                     for column in columns[:-1]:
@@ -316,14 +324,78 @@ class DataFrame():
 
             self.redis.sadd("columns", *tuple(csv_row.keys()))
 
+class DataFrameColumn(object):
+    """ Facilitates pandas dataframe-like setting and getting of cell values
+
+    This class serves as providing syntactic sugar for setting and getting
+    DataFrame values. Values can be set/retrieved via DataFrame()[column][row],
+    as in pandas.
+
+    Args:
+        dataframe: A DataFrame object that this class sets and gets values from.
+        column: The column of the dataframe that this class is accessing.
+    """
+
+    def __init__(self, dataframe, column):
+        """ Initializes DataFrameColumn class
+
+        Args:
+            dataframe: A DataFrame object that this class sets and gets values
+                from.
+            column: The column of the dataframe that this class is accessing.
+        """
+
+        self.dataframe = dataframe
+        self.column = column
+
+    def __getitem__(self, key):
+        """ Set a value in the dataframe
+
+        Args:
+            key: The row of the cell whose value to get.
+
+        Returns:
+            The value of the desired cell.
+        """
+
+        return self.dataframe.get(self.column, key)
+
+    def __setitem__(self, key, value):
+        """ Set a value in the dataframe
+
+        Args:
+            key: The row of the cell whose value to set.
+        """
+
+        self.dataframe.set(self.column, key, value)
+
+    def __str__(self):
+        """ Print the contents of this row in the dataframe when it is used in
+        the print function
+
+        Returns:
+            A string representation of this dataframe column.
+        """
+
+        column_dict = self.dataframe.dump_column(self.column)
+        output_rows = ["\t%s" % self.column]
+
+        for key in sorted(column_dict.keys()):
+            value = column_dict[key]
+            if (value is None):
+                output_rows.append("%s\tna" % key)
+            else:
+                output_rows.append("%s\t%s" % (key, value))
+        return "\n".join(output_rows)
+
 if (__name__ == "__main__"):
     df = DataFrame()
-    df.set("a", "a", 1)
-    df.set("a", "b", 1)
-    df.set("b", "b", 1)
-    df.set("c", "d", 1)
-    print(df.get("a", "b"))
-    print(df.get("b", "a"))
+    df["a"]["a"] = 1
+    df["a"]["b"] = 1
+    df["b"]["b"] = 1
+    df["c"]["d"] = 1
+    print(df["a"]["b"])
+    print(df["b"]["a"])
     print("rows: %s" % df.rows)
     print("columns: %s" % df.columns)
     print(df)
